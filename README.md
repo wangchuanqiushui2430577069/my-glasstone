@@ -1,210 +1,437 @@
-GLASSTONE-nuclear weapons effects modelling in Python
-=====================================================
+# glasstone-java
 
-This library provides a selection of operational nuclear weapons effects models
-implemented in Python using [numpy](http://www.numpy.org/) and [scipy](https://www.scipy.org/scipylib/index.html). These models are intended to provide
-researchers and analysts outside of the defense complex with a better means of
-understanding nuclear weapons effects.
+这是对原 Python 项目 `glasstone` 的 Java 迁移工程。  
+目标不是逐行翻译，而是在 **Java 17 + Maven** 环境下重建一个可维护、可测试、可扩展的数值计算库，并保留原项目的学术模型边界与示例能力。
 
-These models are primarily extracted from two sources:
+## 项目目标
 
->Samuel Glasstone and Phillip J. Dolan, eds. *The Effects of Nuclear Weapons, 3rd Ed.*
-Washington, D.C.: GPO, 1977.
->
->Ministerstvo oborony SSSR, *Iadernoe oruzhie: Posobie dlia ofitserov, 4-oe izd.*
-Moscow: Voenizdat, 1987.
+- 保留原项目的模块划分：`units`、`overpressure`、`radiation`、`thermal`、`fallout`
+- 用 Java 风格重组 API，同时尽量保持与原 Python 公共入口的语义对应
+- 把图表插值、特殊函数、单位换算与领域公式分层隔离
+- 保持数值行为可测试，并为后续继续迁移更多模型留出空间
+- 提供 Java 版图形化示例，便于对照原 `examples/*.py`
 
-The former is the world's most famous text on nuclear weapons effects and the namesake
-of this library. The second is the Soviet military's restricted nuclear weapons
-effects manual.
+## 技术栈
 
-All of the models in this library were used by U.S. and Soviet military analysts
-during the Cold War, and can therefore be considered as having met whatever standards
-for validation that were considered necessary at the time. Most of these models were
-**not** directly derived from atmospheric nuclear test data, however. Instead, they
-were typically abstracted from more sophisticated models by fitting curves to
-various components of their output. Complex "numerical" models were far too slow on
-the computers of the Cold War era to be practical for operational planning and
-analysis, so these simpler "analytical" models were essential for the superpowers'
-military planners.
+- Java 17
+- Maven
+- Hipparchus
+  - 特殊函数：`Gamma`、`Erf`
+  - 分布函数：`NormalDistribution`、`LogNormalDistribution`
+  - 插值：`LinearInterpolator`
+  - 数组工具：`MathArrays`
+  - 基础数学函数：`FastMath`
+- XChart
+  - 用于 2D 曲线示例
+- Swing
+  - 用于窗口、控件和自绘 3D/等值线面板
 
-The aims of this implementation are faithfulness to the original sources and ease-of-use, rather than performance.
+## 工程结构
+
+```text
+glasstone-java
+├─ pom.xml
+├─ README.md
+└─ src
+   ├─ main
+   │  └─ java
+   │     └─ com
+   │        └─ glasstone
+   │           ├─ exception
+   │           ├─ model
+   │           ├─ units
+   │           ├─ math
+   │           ├─ overpressure
+   │           ├─ radiation
+   │           ├─ thermal
+   │           ├─ fallout
+   │           └─ examples
+   │              └─ ui
+   └─ test
+      └─ java
+         └─ com
+            └─ glasstone
+```
+
+## 包级架构说明
+
+### `com.glasstone.exception`
+
+统一定义领域异常：
+
+- `UnknownUnitException`
+  - 单位换算组合不被支持时抛出
+- `ValueOutsideGraphException`
+  - 输入超出原始经验图表有效范围时抛出
+
+这两个异常是整个工程的“边界保护层”，用于显式拒绝错误输入或不可信外推。
+
+### `com.glasstone.model`
+
+定义跨模块共享的数据结构：
+
+- `BurstParameters`
+  - 爆炸当量、爆高、对应单位
+- `Coordinate2D`
+  - 二维坐标
+- `WindProfile`
+  - 风速、风向、风切变
+
+这一层只保存数据，不放业务公式。
+
+### `com.glasstone.units`
+
+统一管理单位体系与换算逻辑：
+
+- 单位枚举
+  - `DistanceUnit`
+  - `PressureUnit`
+  - `DoseUnit`
+  - `SpeedUnit`
+  - `WindShearUnit`
+  - `YieldUnit`
+- `UnitConverter`
+  - 所有模块都通过它做单位归一化
+
+设计原则：
+
+- 领域模块不直接写散落的单位换算常数
+- 先归一到内部标准单位，再换回调用方请求单位
+- 所有不支持的单位组合都显式报错
+
+### `com.glasstone.math`
+
+数学支撑层，负责把通用数值问题从领域公式中剥离出来：
+
+- `Interpolation`
+  - 一维线性插值
+  - 区间检查
+  - 点集排序与重复点检查
+- `SpecialFunctions`
+  - Gamma
+  - logGamma
+  - erf
+  - 标准正态分布 CDF
+
+这层不包含任何核效应业务语义，只提供数值工具。
+
+### `com.glasstone.overpressure`
+
+冲击波/超压模块：
+
+- `OverpressureCalculator`
+  - `brodeOverpressure`
+  - `dnaStaticOverpressure`
+  - `dnaDynamicPressure`
+  - `sovietOverpressure`
+  - `inverseSovietOverpressure`
+- `SovietOverpressureData`
+  - 保存苏联超压图表离散点
+  - 为“正查”和“反查”准备排序后的曲线
+
+这一层的结构是：
+
+1. 公开 API 接收 `BurstParameters + 距离 + 输出单位`
+2. 统一把输入换算到公式需要的单位
+3. 调用对应模型
+4. 输出前再做单位换算
+
+毁伤资料：
+https://www.cdc.gov/niosh/docket/archive/pdfs/NIOSH-125/125-ExplosionsandRefugeChambers.pdf
+https://en.wikipedia.org/wiki/Overpressure
+https://html.rhhz.net/ZGFSWS/HTML/2019-2-129.htm
 
 
-FAQ
----
+### `com.glasstone.radiation`
 
-*Is this legal? Isn't this sort of thing supposed to be classified?*
+放射性沉降物模块：
 
-All of the included models are derived from non-classified sources. Certain models
-were left out because of their murky legal status (for instance, those in the 1996
-*Handbook of Nuclear Weapon Effects: Calculational Tools Abstracted from DSWA's
-Effects Manual One (EM-1)*, which is subject to the Arms Export Control Act.
+- `RadiationCalculator`
+  - 苏联模型：
+    - `sovietSummary`
+    - `sovietGamma`
+    - `sovietNeutron`
+  - Glasstone 模型：
+    - `glasstoneSummary`
+    - `glasstoneFissionFragmentGamma`
+    - `glasstoneFissionSecondaryGamma`
+    - `glasstoneThermonuclearSecondaryGamma`
+    - `glasstoneFissionNeutron`
+    - `glasstoneThermonuclearNeutron`
+- `RadiationScenario`
+  - `SUMMER` / `WINTER` / `MOUNTAIN`
+- `SovietRadiationData`
+  - 苏联图表数据
+- `GlasstoneRadiationData`
+  - Glasstone 图表数据
 
-While far more information about this subject is classified than needs to be, higher-fidelity models of certain nuclear weapons effects can be used by people with
-sufficient physical knowledge to learn non-trivial things about nuclear weapons
-design. Don't worry, *nothing* here falls into that category!
+这一层的核心特点：
 
-*Are these models 'right'?*
+- 大量使用“图表数据 + 插值”
+- 苏联模型采用“先按距离插值，再按当量插值”
+- Glasstone 模型由多个剂量分量叠加
 
-As George E. P. Box put it, "all models are wrong, but some are useful." These models
-are included because the U.S. and Soviet militaries definitely considered them
-'useful.'
+### `com.glasstone.thermal`
 
-A major goal of this project is to dispel the myth that *anyone* has nuclear
-weapons effects models that can tell you what will "really happen" should these
-weapons be used. Note, for instance, the extent to which the Soviet and U.S. models
-disagree with each other...
+热辐射模块：
 
-*Wait, the U.S. and the Soviet models don't match?! What's up with that?*
+- `ThermalCalculator`
+  - `sovietAirThermal`
+  - `sovietGroundThermal`
+  - `inverseSovietAirThermal`
+  - `inverseSovietGroundThermal`
 
-A major reason why nuclear weapons effects models are less accurate than we'd like is
-because they draw far less on atmospheric test experience than most people suppose.
-That may seem astonishing, given the many hundreds of atmospheric nuclear tests
-carried out by the superpowers before the 1963 Limited Test Ban Treaty, but the vast
-majority of those tests were for weapons development rather than to study nuclear
-weapons effects. Furthermore, many of the tests that would be necessary to construct
-really detailed models of nuclear weapons effects were deemed far too dangerous to
-carry out in practice. Take, for instance, fallout from high-yield weapons detonated
-on the surface. U.S. analysts suspected-accurately, it turns out-that the USSR planned
-to employ its weapons this way, so early fallout models such as WSEG10 (included in
-this library) are designed to address this case. Yet no tests of this type were ever
-conducted, because they would create immense fallout hazards even compared to a burst
-on a tower.
+特点：
 
-As a consequence of the limited variety of tests, both U.S. and Soviet
-researchers assumed that the phenomena they observed in their tests were 'typical'-but
-nuclear weapons effects are highly sensitive to the environment in which they are
-conducted. To get a taste of what that led to in practice, look at the ```3dopcomparison.py``` script in the ```examples``` directory. Because the Soviets carried out tests
-in grassland conditions, they observed extreme "thermal precursor" phenomena that
-U.S. analysts regarded as merely conjectural. As a result, "default" Soviet
-models of overpressure from nuclear explosions *assume* that these precursors are
-present, unlike their U.S. counterparts.
+- 以离散图表为基础
+- 通过对数距离与经验直线关系进行正算/反算
+- 支持国际能见度代码映射到模型图表编号
 
-*How did you make GLASSTONE?*
+### `com.glasstone.fallout`
 
-Some of the models in the library were reimplemented versions of old FORTRAN programs
-specified in declassified research reports. Those from *The Effects of Nuclear Weapons* and *Iadernoe oruzhie*, however, were generally constructed by using graph
-digitization software to turn the graphs in these publications into data points and
-then interpolating between them.
+放射性沉降模块：
 
-My implementation takes pains to avoid giving output that is outside the original
-graphs from which it is derived. When such a value is requested it will result in a
-`ValueOutsideGraphError`.
+- `Wseg10Config`
+  - WSEG-10 输入配置
+- `Wseg10Model`
+  - 模型主体
+  - 在构造时预计算云团和扩散参数
+  - 后续可重复调用：
+    - `doseRateHPlus1`
+    - `falloutArrivalTimeHours`
+    - `equivalentResidualDose`
 
-*How do I use GLASSTONE*?
+这是当前 Java 工程里最典型的“有状态模型对象”。  
+和其他模块的纯函数式风格不同，`Wseg10Model` 更适合先构建、再批量查询。
 
-Glasstone is a Python library that builds on numpy and SciPy. Its only other
-dependency is `affine`, which is only used by the fallout model. It is recommended,
-however, to install matplotlib, a plotting library that is built on top of scipy, as
-well.
+### `com.glasstone.examples`
 
-SciPy can be difficult to install for some users due to its technical dependencies
-(most particularly a fortran compiler). Fortunately, pre-built binaries are available
-for most platforms. If you are new to Python, one of the easiest ways to get
-started is to chose something like the [Anaconda distribution](https://www.continuum.io/downloads), which comes with numpy, scipy, and matplotlib preinstalled.
+Java 版图形示例入口：
 
-For a modern Python workflow, create a virtual environment and install the package
-with pip from the project root:
+- `InteractiveOverpressureExample`
+- `InteractiveDynamicExample`
+- `ThermalDemoExample`
+- `OverpressureComparison3DExample`
+- `RadiationComparison3DExample`
+- `Wseg10DoseRateExample`
+- `Wseg10DoseExample`
+- `Wseg10CasualtiesExample`
+- `ExampleSupport`
+  - 示例共享参数、配色、网格采样、默认 WSEG-10 配置
+
+### `com.glasstone.examples.ui`
+
+示例层 UI 组件：
+
+- `SurfacePlotPanel`
+  - 自绘 3D 线框面板
+- `ContourPlotPanel`
+  - 自绘二维等值线/色带面板
+- `SurfaceSeries`
+  - 3D 曲面序列定义
+
+这一层故意和核心算法层隔离，避免把 UI 依赖带入计算模块。
+
+## 架构设计原则
+
+### 1. 分层明确
+
+工程按以下顺序组织依赖：
+
+`exception/model/units/math` → `overpressure/radiation/thermal/fallout` → `examples/ui`
+
+含义是：
+
+- 基础层不依赖业务层
+- 业务层只依赖基础层
+- 示例层依赖业务层，但业务层不依赖任何图形库
+
+### 2. 单位换算集中化
+
+所有公开 API 都尽量采用：
+
+1. 接受调用方指定单位
+2. 统一换算到模型原生单位
+3. 计算
+4. 输出时换回调用方单位
+
+这样做的好处是：
+
+- 领域公式更清晰
+- 单位错误更容易定位
+- 测试可以直接做跨单位一致性校验
+
+### 3. 图表数据与公式分离
+
+像 `SovietOverpressureData`、`SovietRadiationData`、`GlasstoneRadiationData` 这类文件只保存数据和轻量整理逻辑。  
+真正的业务计算在对应 `Calculator` 内完成。
+
+这样做的价值是：
+
+- 数据源更容易校对
+- 公式层更容易阅读和测试
+- 后续替换数据来源时影响面更小
+
+### 4. Hipparchus 只用于“数学共性”，不侵入业务语义
+
+当前使用 Hipparchus 的位置主要是：
+
+- `Interpolation`：线性插值器和数组工具
+- `SpecialFunctions`：特殊函数和分布函数
+- `FastMath`：统一基础数学函数
+
+领域公式本身仍保留业务语义，不会为了“全量库化”而牺牲可读性。
+
+## 关键类说明
+
+### `UnitConverter`
+
+工程的公共换算入口。  
+如果后续新增单位，优先在这里扩展，而不是把换算常数散落到各业务类。
+
+### `Interpolation`
+
+所有图表模型的公共插值入口。  
+如果将来需要二维插值、样条或积分，这一层可以继续扩展。
+
+### `Wseg10Model`
+
+当前最“面向对象”的核心模型。  
+它和 `OverpressureCalculator` / `RadiationCalculator` / `ThermalCalculator` 的区别在于：
+
+- 前三者更像无状态函数库
+- `Wseg10Model` 需要保留一套预计算状态
+
+### `SurfacePlotPanel` 与 `ContourPlotPanel`
+
+这两个类属于“示例展示层”，不参与任何物理模型计算。  
+它们的职责是把数值结果转成可以在 Swing 窗口里直接展示的图形。
+
+## 当前已完成的迁移范围
+
+### 已完成
+
+- 单位系统与异常
+- 数学支撑层
+- 苏联热辐射模型
+- 苏联穿透辐射模型
+- Glasstone 穿透辐射分支
+- WSEG-10 沉降模型
+- 超压模块的 Brode / DNA / 苏联主要入口
+- Java 图形化示例
+
+### 当前状态
+
+- 核心计算代码可编译
+- 核心测试可通过
+- 示例可通过 Maven 直接启动
+
+## 构建与测试
+
+进入子项目目录：
 
 ```bash
-python -m venv .venv
-source .venv/bin/activate
-python -m pip install --upgrade pip
-python -m pip install .
+cd glasstone-java
 ```
 
-That will install glasstone and its runtime dependencies (`numpy`, `scipy`, and
-`affine`) into the active environment. If you want an editable install while working
-on the source tree, use:
+编译：
 
 ```bash
-python -m pip install -e .
+mvn compile
 ```
 
-At this point, the library should be available:
-```pycon
-$ python
-Python 3.x
->>> from glasstone.overpressure import soviet_overpressure
->>> soviet_overpressure(10.0, 1000.0, 120.0)
-0.3599267036556865
-```
-
-To run the smoke tests shipped with the project:
+运行测试：
 
 ```bash
-python -m unittest discover -s tests
+mvn test
 ```
 
-For practical examples of how to use glasstone, see the scripts in the `/examples`
-folder.
+## 运行示例
 
-*What can I use GLASSTONE for?*
+使用 `exec-maven-plugin`：
 
-Glasstone can be used for:
-* education-plots, graphs, and other visuals to help others better understand nuclear weapons
-* damage assessment studies-these models were used by the Cold War superpowers to estimate the effects of nuclear attack
-* {am|be}musement
+```bash
+mvn exec:java -Dexec.mainClass=com.glasstone.examples.InteractiveOverpressureExample
+```
 
-*What are these crazy units that you're using?*
+可运行示例：
 
-Cold War-era nuclear weapons effects models employed a bewildering array of non-SI
-units. Trust me, you don't want to deal in things like kilofeet or (this was the worst
-I ever came across) nautical miles-per hour-per-kilofoot! I've tried to standardize on
-meters, m/s, kilotons(kT), kg/cm^2, even though the U.S. models familiar to most
-English speakers do not use them. Roentgen/Rads are a partial exception, since the
-Russian/Soviet models also used these.
+- `com.glasstone.examples.InteractiveOverpressureExample`
+- `com.glasstone.examples.InteractiveDynamicExample`
+- `com.glasstone.examples.ThermalDemoExample`
+- `com.glasstone.examples.OverpressureComparison3DExample`
+- `com.glasstone.examples.RadiationComparison3DExample`
+- `com.glasstone.examples.Wseg10DoseRateExample`
+- `com.glasstone.examples.Wseg10DoseExample`
+- `com.glasstone.examples.Wseg10CasualtiesExample`
 
-*I don't undertand what the output of the fallout model.*
+## 示例与 Python 对照
 
-The provided fallout model is WSEG-10, which was developed by the Weapons Systems
-Evaluation Group in 1959. I chose WSEG-10 for inclusion in the library because it was
-the fallout model most commonly used in damage assessment studies in the U.S. in the
-1960s-70s. 
+| Python 示例 | Java 示例 |
+|---|---|
+| `examples/interactive_overpressure.py` | `InteractiveOverpressureExample` |
+| `examples/interactive_dynamic.py` | `InteractiveDynamicExample` |
+| `examples/thermal_demo.py` | `ThermalDemoExample` |
+| `examples/3dopcomparison.py` | `OverpressureComparison3DExample` |
+| `examples/3dradcomparison.py` | `RadiationComparison3DExample` |
+| `examples/wseg10.py` | `Wseg10DoseRateExample` |
+| `examples/wseg10_dose.py` | `Wseg10DoseExample` |
+| `examples/wseg10_casualties.py` | `Wseg10CasualtiesExample` |
 
-The aim of WSEG-10 was to try to estimate the cumulative fallout hazard from a nuclear
-war in a reasonable amount of time on the computers available when it was designed. To
-do so it makes some assumptions, like neglecting the cloud stem, which are defensible
-for megaton-range bursts but are quite dubious for bursts of a few kilotons. It draws
-on empirical fits to data generated by early "disk tosser" fallout models developed at
-the RAND Corporation rather than atmospheric test data, of which there was relatively
-little.
+## 开发建议
 
-Its output is an elliptical fallout pattern estimating where the radioactivity in the
-fallout cloud will eventually be deposited. The model works by 'smearing' the fallout
-cloud across the landscape on the basis of a single 'effective wind' and wind shear
-value. This is then used to calculate an estimate of a cumulative effective dose
-estimate for different points in the fallout pattern for a period until 30 days after
-the burst. 
+### 如果继续迁移模型
 
-;tldr--WSEG-10 doesn't mind details; it makes an estimate of whether a person in a
-particular spot downwind from the burst received a large enough radiation dose to kill
-them.
+建议优先顺序：
 
-*I want an EMP model. Why didn't you include one?*
+1. 补更多回归测试样本
+2. 继续完善 `overpressure` 中更复杂的波形/冲量部分
+3. 提炼统一的图表数据装载规范
+4. 为示例层增加统一启动器
 
-Unfortunately, there are no 'empirical' EMP models, even though I gather there have
-been serious attempts to create them. EMP phenomena are highly complex and not
-especially well-understood (the notorious high-altitude emp effect only became
-apparent in the 1962 test series, after which the superpowers stopped atmospheric
-testing). The reason these effects are so controversial is because there is so little
-actual test data about them. Modeling either local or high-altitude EMP effects really
-requires a partial differential equation solver of some kind and certain details about
-the design of the weapon being detonated that are generally kept classified (see point
-1 above).
+### 如果继续工程化
 
-*How can I contribute to GLASSTONE?*
+建议下一步：
 
-Bug reports and pull requests are more than welcome. 
+- 增加 `ExampleLauncher`
+- 给示例层加截图或导出能力
+- 为核心模型补更多边界测试
+- 为外部调用者提供更稳定的 facade API
 
-See the [project page on GitHub](https://github.com/GOFAI/glasstone).
+## 设计取舍说明
 
-*Who are you?*
+### 为什么示例层没有直接引 3D 专用图形库
 
-By education I am a historian of the Soviet Union, and in particular the history of
-that state's relationship with nuclear energy. I developed GLASSTONE as part of a
-MacArthur Nuclear Security Fellowship at Stanford's Center for International Security
-and Cooperation (CISAC).
+当前做法是：
 
-License: MIT
+- 2D 曲线：`XChart`
+- 3D 线框 / 等值线：Swing 自绘
+
+原因是：
+
+- 依赖更轻
+- Maven 构建更稳定
+- 对当前“迁移验证型工程”已经足够
+
+如果未来目标是更强交互、更精细 3D 渲染，再考虑引入更完整的可视化框架更合适。
+
+### 为什么保留数据类
+
+原项目大量模型都依赖离散图表。  
+直接把这些数据单独放到 `*Data` 类里，虽然文件会比较长，但优点是边界清楚：
+
+- 数据是数据
+- 公式是公式
+- UI 是 UI
+
+这比把数据散进计算方法里更容易维护。
+
+## 结论
+
+当前 `glasstone-java` 已经不是单纯的迁移脚手架，而是一个具备以下能力的 Java 工程：
+
+- 可编译
+- 可测试
+- 可运行图形示例
+- 模块边界清晰
+- 可以继续作为正式 Java 库演进
